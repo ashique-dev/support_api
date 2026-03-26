@@ -10,6 +10,7 @@ import {
   Index,
   BeforeInsert,
   BeforeUpdate,
+  RelationId,
 } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
 import { Tenant } from '../../tenants/entities/tenant.entity';
@@ -22,14 +23,14 @@ export enum UserRole {
 }
 
 @Entity('users')
-@Index(['tenantId', 'email'], { unique: true }) // Email unique per tenant
+// Use 'tenant' (the relation property) not 'tenantId' (the RelationId alias)
+@Index(['tenant', 'email'], { unique: true })
 export class User {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Index()
-  @Column({ nullable: true })
-  tenantId: string; // null for SuperAdmin
+  @RelationId((user: User) => user.tenant)
+  tenantId: string;
 
   @Column({ length: 100 })
   firstName: string;
@@ -41,7 +42,7 @@ export class User {
   @Column({ length: 255 })
   email: string;
 
-  @Column({ select: false }) // Never return password in queries
+  @Column({ select: false })
   password: string;
 
   @Column({ type: 'enum', enum: UserRole, default: UserRole.AGENT })
@@ -51,7 +52,7 @@ export class User {
   isActive: boolean;
 
   @Column({ nullable: true, type: 'text' })
-  refreshToken: string; // Hashed refresh token
+  refreshToken: string;
 
   @CreateDateColumn()
   createdAt: Date;
@@ -59,14 +60,13 @@ export class User {
   @UpdateDateColumn()
   updatedAt: Date;
 
-  @ManyToOne(() => Tenant, (tenant) => tenant.users, { nullable: true })
-  @JoinColumn({ name: 'tenantId' })
+  @ManyToOne(() => Tenant, (tenant) => tenant.users, { nullable: true, eager: false })
+  @JoinColumn({ name: 'tenant_id' })
   tenant: Tenant;
 
   @OneToMany(() => Conversation, (conv) => conv.assignedAgent)
   assignedConversations: Conversation[];
 
-  // ─── Hooks ──────────────────────────────────────────────────────────────
   @BeforeInsert()
   @BeforeUpdate()
   async hashPassword() {

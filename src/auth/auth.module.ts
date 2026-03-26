@@ -13,7 +13,7 @@ import { Tenant } from '../tenants/entities/tenant.entity';
   imports: [
     TypeOrmModule.forFeature([User, Tenant]),
     PassportModule.register({ defaultStrategy: 'jwt' }),
-    JwtModule.register({}), // Secrets configured per-strategy via ConfigService
+    JwtModule.register({}),
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtAccessStrategy, JwtRefreshStrategy],

@@ -10,21 +10,23 @@ export class UsersService {
   ) {}
 
   async findAllByTenant(tenantId: string): Promise<User[]> {
-    return this.userRepo.find({
-      where: { tenantId },
-      order: { createdAt: 'DESC' },
-      select: ['id', 'firstName', 'lastName', 'email', 'role', 'isActive', 'createdAt'],
-    });
+    return this.userRepo
+      .createQueryBuilder('user')
+      .where('user.tenant_id = :tenantId', { tenantId })
+      .orderBy('user.created_at', 'DESC')
+      .getMany();
   }
 
   async findOne(id: string, tenantId?: string): Promise<User> {
-    const where: any = { id };
-    if (tenantId) where.tenantId = tenantId;
+    const qb = this.userRepo
+      .createQueryBuilder('user')
+      .where('user.id = :id', { id });
 
-    const user = await this.userRepo.findOne({
-      where,
-      select: ['id', 'firstName', 'lastName', 'email', 'role', 'isActive', 'tenantId', 'createdAt'],
-    });
+    if (tenantId) {
+      qb.andWhere('user.tenant_id = :tenantId', { tenantId });
+    }
+
+    const user = await qb.getOne();
     if (!user) throw new NotFoundException('User not found');
     return user;
   }
@@ -32,7 +34,6 @@ export class UsersService {
   async deactivate(id: string, requestingUser: User): Promise<User> {
     const user = await this.findOne(id);
 
-    // TenantAdmin can only deactivate users in their own tenant
     if (
       requestingUser.role === UserRole.TENANT_ADMIN &&
       user.tenantId !== requestingUser.tenantId
@@ -40,14 +41,16 @@ export class UsersService {
       throw new ForbiddenException('Cannot deactivate users outside your tenant');
     }
 
-    user.isActive = false;
-    return this.userRepo.save(user);
+    await this.userRepo.update(id, { isActive: false });
+    return this.findOne(id);
   }
 
   async getAgentsByTenant(tenantId: string): Promise<User[]> {
-    return this.userRepo.find({
-      where: { tenantId, role: UserRole.AGENT, isActive: true },
-      select: ['id', 'firstName', 'lastName', 'email'],
-    });
+    return this.userRepo
+      .createQueryBuilder('user')
+      .where('user.tenant_id = :tenantId', { tenantId })
+      .andWhere('user.role = :role', { role: UserRole.AGENT })
+      .andWhere('user.is_active = true')
+      .getMany();
   }
 }

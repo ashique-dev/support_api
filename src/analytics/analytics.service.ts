@@ -73,6 +73,11 @@ export class AnalyticsService {
     //   - messages(conversation_id)          → fast JOIN
     //   - conversations(tenant_id, status, created_at) → fast WHERE + sort
     //
+    const whereClause = tenantId
+      ? `WHERE c.tenant_id = $1 AND c.created_at >= NOW() - INTERVAL '30 days'`
+      : `WHERE c.created_at >= NOW() - INTERVAL '30 days'`;
+    const queryParams = tenantId ? [tenantId] : [];
+
     const data = await this.dataSource.query<TopConversationResult[]>(
       `
       SELECT
@@ -84,14 +89,12 @@ export class AnalyticsService {
         MAX(m.created_at)     AS "lastActivityAt"
       FROM conversations c
       INNER JOIN messages m ON m.conversation_id = c.id
-      WHERE
-        c.tenant_id = $1
-        AND c.created_at >= NOW() - INTERVAL '30 days'
+      ${whereClause}
       GROUP BY c.id, c.subject, c.customer_email, c.tenant_id
       ORDER BY "messageCount" DESC
       LIMIT 10
       `,
-      [tenantId],
+      queryParams,
     );
 
     // ── Step 3: Store result in Redis with TTL ─────────────────────────────
@@ -176,7 +179,13 @@ export class AnalyticsService {
   }
 
   // ─── Tenant-Level Conversation Stats ──────────────────────────────────────
-  async getTenantStats(tenantId: string) {
+  async getTenantStats(tenantId: string | null) {
+    // SuperAdmin (tenantId=null) → aggregate across all tenants
+    const whereClause = tenantId
+      ? `WHERE tenant_id = $1 AND created_at >= NOW() - INTERVAL '30 days'`
+      : `WHERE created_at >= NOW() - INTERVAL '30 days'`;
+    const params = tenantId ? [tenantId] : [];
+
     const stats = await this.dataSource.query(
       `
       SELECT
@@ -186,13 +195,13 @@ export class AnalyticsService {
         COUNT(*) FILTER (WHERE status = 'closed')   AS "closedCount",
         COUNT(*)                                     AS "totalCount",
         ROUND(
-          AVG(EXTRACT(EPOCH FROM (resolved_at - created_at)) / 3600), 2
-        ) FILTER (WHERE resolved_at IS NOT NULL)     AS "avgResolutionHours"
+          AVG(EXTRACT(EPOCH FROM (resolved_at - created_at)) / 3600)
+          FILTER (WHERE resolved_at IS NOT NULL), 2
+        ) AS "avgResolutionHours"
       FROM conversations
-      WHERE tenant_id = $1
-        AND created_at >= NOW() - INTERVAL '30 days'
+      ${whereClause}
       `,
-      [tenantId],
+      params,
     );
 
     return stats[0];

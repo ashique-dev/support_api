@@ -4,8 +4,8 @@ import {
   ConflictException,
   BadRequestException,
 } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
+import { Repository, DataSource, IsNull } from 'typeorm';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcryptjs';
@@ -23,13 +23,13 @@ export class AuthService {
   constructor(
     @InjectRepository(User) private userRepo: Repository<User>,
     @InjectRepository(Tenant) private tenantRepo: Repository<Tenant>,
+    @InjectDataSource() private dataSource: DataSource,
     private jwtService: JwtService,
     private configService: ConfigService,
   ) {}
 
   // ─── Sign Up ────────────────────────────────────────────────────────────────
   async signUp(dto: SignUpDto): Promise<{ user: Partial<User>; tokens: TokenPair }> {
-    // Validate tenant for non-SuperAdmin roles
     if (dto.role !== UserRole.SUPER_ADMIN) {
       if (!dto.tenantId) {
         throw new BadRequestException('tenantId is required for non-SuperAdmin users');
@@ -40,10 +40,8 @@ export class AuthService {
       }
     }
 
-    // Check email uniqueness within tenant scope
-    const existing = await this.userRepo.findOne({
-      where: { email: dto.email, tenantId: dto.tenantId ?? null },
-    });
+    // Use raw query to check uniqueness with actual column name
+    const existing = await this.findUserByEmailAndTenant(dto.email, dto.tenantId ?? null);
     if (existing) {
       throw new ConflictException('Email already registered for this tenant');
     }
@@ -54,21 +52,21 @@ export class AuthService {
       email: dto.email,
       password: dto.password,
       role: dto.role ?? UserRole.AGENT,
-      tenantId: dto.tenantId ?? null,
+      tenant: dto.tenantId ? ({ id: dto.tenantId } as any) : null,
     });
 
     await this.userRepo.save(user);
+    // Reload to get tenantId populated via RelationId
+    const saved = await this.findUserById(user.id);
 
-    const tokens = await this.generateTokens(user);
-    await this.storeRefreshToken(user.id, tokens.refreshToken);
+    const tokens = await this.generateTokens(saved);
+    await this.storeRefreshToken(saved.id, tokens.refreshToken);
 
-    const { password, refreshToken, ...safeUser } = user as any;
-    return { user: safeUser, tokens };
+    return { user: this.sanitize(saved), tokens };
   }
 
   // ─── Sign In ─────────────────────────────────────────────────────────────────
   async signIn(dto: SignInDto): Promise<{ user: Partial<User>; tokens: TokenPair }> {
-    // Resolve tenantId from slug if provided
     let tenantId: string | null = null;
     if (dto.tenantSlug) {
       const tenant = await this.tenantRepo.findOne({
@@ -80,10 +78,18 @@ export class AuthService {
       tenantId = tenant.id;
     }
 
-    const user = await this.userRepo.findOne({
-      where: { email: dto.email, tenantId: tenantId ?? null },
-      select: ['id', 'email', 'password', 'role', 'tenantId', 'isActive', 'firstName', 'lastName'],
-    });
+    // Use raw query builder to filter by tenant_id column directly
+    const user = await this.userRepo
+      .createQueryBuilder('user')
+      .addSelect('user.password') // password has select:false, must explicitly add
+      .where('user.email = :email', { email: dto.email })
+      .andWhere(
+        tenantId
+          ? 'user.tenant_id = :tenantId'
+          : 'user.tenant_id IS NULL',
+        tenantId ? { tenantId } : {},
+      )
+      .getOne();
 
     if (!user || !user.isActive) {
       throw new UnauthorizedException('Invalid credentials');
@@ -97,8 +103,7 @@ export class AuthService {
     const tokens = await this.generateTokens(user);
     await this.storeRefreshToken(user.id, tokens.refreshToken);
 
-    const { password, refreshToken, ...safeUser } = user as any;
-    return { user: safeUser, tokens };
+    return { user: this.sanitize(user), tokens };
   }
 
   // ─── Refresh Tokens ──────────────────────────────────────────────────────────
@@ -114,6 +119,32 @@ export class AuthService {
   }
 
   // ─── Private Helpers ─────────────────────────────────────────────────────────
+  private async findUserByEmailAndTenant(email: string, tenantId: string | null): Promise<User | null> {
+    const qb = this.userRepo
+      .createQueryBuilder('user')
+      .where('user.email = :email', { email });
+
+    if (tenantId) {
+      qb.andWhere('user.tenant_id = :tenantId', { tenantId });
+    } else {
+      qb.andWhere('user.tenant_id IS NULL');
+    }
+
+    return qb.getOne();
+  }
+
+  private async findUserById(id: string): Promise<User> {
+    return this.userRepo
+      .createQueryBuilder('user')
+      .where('user.id = :id', { id })
+      .getOne();
+  }
+
+  private sanitize(user: User): Partial<User> {
+    const { password, refreshToken, ...safe } = user as any;
+    return safe;
+  }
+
   private async generateTokens(user: User): Promise<TokenPair> {
     const payload = {
       sub: user.id,
@@ -137,7 +168,6 @@ export class AuthService {
   }
 
   private async storeRefreshToken(userId: string, refreshToken: string): Promise<void> {
-    // Store hashed refresh token – plain token never persisted
     const hashed = await bcrypt.hash(refreshToken, 10);
     await this.userRepo.update(userId, { refreshToken: hashed });
   }

@@ -7,7 +7,7 @@ import { Repository } from 'typeorm';
 import { User } from '../../users/entities/user.entity';
 
 export interface JwtPayload {
-  sub: string;         // userId
+  sub: string;
   email: string;
   role: string;
   tenantId: string | null;
@@ -29,14 +29,17 @@ export class JwtAccessStrategy extends PassportStrategy(Strategy, 'jwt') {
   }
 
   async validate(payload: JwtPayload) {
-    const user = await this.userRepo.findOne({
-      where: { id: payload.sub, isActive: true },
-    });
+    // Use query builder — avoids findOne({where:{id,...}}) which breaks with RelationId
+    const user = await this.userRepo
+      .createQueryBuilder('user')
+      .where('user.id = :id', { id: payload.sub })
+      .andWhere('user.is_active = true')
+      .getOne();
 
     if (!user) {
       throw new UnauthorizedException('User not found or inactive');
     }
 
-    return user; // Attached to req.user
+    return user;
   }
 }

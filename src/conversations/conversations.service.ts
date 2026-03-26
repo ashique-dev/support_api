@@ -28,62 +28,109 @@ export class ConversationsService {
     @InjectQueue(RESOLUTION_QUEUE) private resolutionQueue: Queue,
   ) {}
 
-  // ─── Create Conversation ──────────────────────────────────────────────────
+  // ─── Create ───────────────────────────────────────────────────────────────
   async create(dto: CreateConversationDto, user: User): Promise<Conversation> {
     const conversation = this.convRepo.create({
       ...dto,
-      tenantId: user.tenantId,
+      tenant: { id: user.tenantId } as any,
       status: ConversationStatus.OPEN,
     });
     return this.convRepo.save(conversation);
   }
 
-  // ─── List Conversations (with pagination + filters) ───────────────────────
+  // ─── List (pagination + filters) ─────────────────────────────────────────
   async findAll(
     dto: ListConversationsDto,
     user: User,
   ): Promise<{ data: Conversation[]; total: number; page: number; limit: number }> {
     const { page = 1, limit = 20, status, agentId } = dto;
+    const offset = (page - 1) * limit;
 
-    const qb = this.convRepo
-      .createQueryBuilder('conv')
-      .leftJoinAndSelect('conv.assignedAgent', 'agent')
-      .where('conv.tenantId = :tenantId', { tenantId: user.tenantId });
+    // Build WHERE conditions as a raw SQL string to avoid TypeORM column mapping issues
+    const conditions: string[] = [];
+    const params: any[] = [];
+    let paramIdx = 1;
 
-    // Agents can only see their own or unassigned conversations
+    // Tenant filter — SuperAdmin (tenantId=null) sees all
+    if (user.tenantId) {
+      conditions.push(`conv.tenant_id = $${paramIdx++}`);
+      params.push(user.tenantId);
+    }
+
+    // Agent scope
     if (user.role === UserRole.AGENT) {
-      qb.andWhere(
-        '(conv.assignedAgentId = :userId OR conv.assignedAgentId IS NULL)',
-        { userId: user.id },
-      );
+      conditions.push(`(conv.assigned_agent_id = $${paramIdx++} OR conv.assigned_agent_id IS NULL)`);
+      params.push(user.id);
     }
 
     if (status) {
-      qb.andWhere('conv.status = :status', { status });
+      conditions.push(`conv.status = $${paramIdx++}`);
+      params.push(status);
     }
 
     if (agentId) {
-      qb.andWhere('conv.assignedAgentId = :agentId', { agentId });
+      conditions.push(`conv.assigned_agent_id = $${paramIdx++}`);
+      params.push(agentId);
     }
 
-    qb.orderBy('conv.createdAt', 'DESC')
-      .skip((page - 1) * limit)
-      .take(limit);
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
-    const [data, total] = await qb.getManyAndCount();
+    // Count query
+    const countResult = await this.dataSource.query(
+      `SELECT COUNT(*)::int AS total FROM conversations conv ${whereClause}`,
+      params,
+    );
+    const total = countResult[0]?.total ?? 0;
+
+    // Data query with pagination
+    const limitParam = paramIdx++;
+    const offsetParam = paramIdx++;
+    const data = await this.dataSource.query(
+      `SELECT
+        conv.id,
+        conv.subject,
+        conv.description,
+        conv.status,
+        conv.priority,
+        conv.customer_email AS "customerEmail",
+        conv.customer_name AS "customerName",
+        conv.resolved_at AS "resolvedAt",
+        conv.claimed_at AS "claimedAt",
+        conv.created_at AS "createdAt",
+        conv.updated_at AS "updatedAt",
+        conv.tenant_id AS "tenantId",
+        conv.assigned_agent_id AS "assignedAgentId",
+        agent.id AS "agentId",
+        agent.first_name AS "agentFirstName",
+        agent.last_name AS "agentLastName",
+        agent.email AS "agentEmail"
+       FROM conversations conv
+       LEFT JOIN users agent ON agent.id = conv.assigned_agent_id
+       ${whereClause}
+       ORDER BY conv.created_at DESC
+       LIMIT $${limitParam} OFFSET $${offsetParam}`,
+      [...params, limit, offset],
+    );
+
     return { data, total, page, limit };
   }
 
-  // ─── Get Single Conversation ──────────────────────────────────────────────
+  // ─── Get Single ───────────────────────────────────────────────────────────
   async findOne(id: string, user: User): Promise<Conversation> {
-    const conv = await this.convRepo.findOne({
-      where: { id, tenantId: user.tenantId },
-      relations: ['assignedAgent', 'messages'],
-    });
+    const qb = this.convRepo
+      .createQueryBuilder('conv')
+      .leftJoinAndSelect('conv.assignedAgent', 'agent')
+      .leftJoinAndSelect('conv.messages', 'messages')
+      .where('conv.id = :id', { id });
+
+    if (user.tenantId) {
+      qb.andWhere('conv.tenant_id = :tenantId', { tenantId: user.tenantId });
+    }
+
+    const conv = await qb.getOne();
 
     if (!conv) throw new NotFoundException('Conversation not found');
 
-    // Agents can only view their assigned or unassigned conversations
     if (
       user.role === UserRole.AGENT &&
       conv.assignedAgentId &&
@@ -95,68 +142,47 @@ export class ConversationsService {
     return conv;
   }
 
-  // ─── Claim Conversation (with Concurrency Control) ────────────────────────
-  //
-  // Problem: Two agents hit POST /conversations/:id/claim simultaneously.
-  //          Both read assignedAgentId = null, both decide to claim it,
-  //          and one agent's claim silently overwrites the other.
-  //
-  // Solution: We use a PostgreSQL transaction with SELECT FOR UPDATE.
-  //   - "SELECT FOR UPDATE" acquires a row-level exclusive lock.
-  //   - The second transaction's SELECT FOR UPDATE is BLOCKED until
-  //     the first transaction either commits or rolls back.
-  //   - After the first tx commits (assignedAgentId is set), the second
-  //     tx reads the updated row, sees it's already claimed, and throws.
-  //   - This guarantees at most one agent can claim a conversation.
-  //
+  // ─── Claim (SELECT FOR UPDATE concurrency control) ────────────────────────
   async claimConversation(id: string, user: User): Promise<Conversation> {
     if (user.role !== UserRole.AGENT && user.role !== UserRole.TENANT_ADMIN) {
       throw new ForbiddenException('Only agents can claim conversations');
     }
 
-    // Run inside an explicit database transaction
     return this.dataSource.transaction(async (manager) => {
-      // SELECT ... FOR UPDATE – acquires exclusive row lock
-      // Any concurrent transaction attempting the same will WAIT here
-      const conversation = await manager
+      const qb = manager
         .createQueryBuilder(Conversation, 'conv')
-        .setLock('pessimistic_write')       // ← SELECT FOR UPDATE
-        .where('conv.id = :id', { id })
-        .andWhere('conv.tenantId = :tenantId', { tenantId: user.tenantId })
-        .getOne();
+        .setLock('pessimistic_write')
+        .where('conv.id = :id', { id });
 
-      if (!conversation) {
-        throw new NotFoundException('Conversation not found');
+      if (user.tenantId) {
+        qb.andWhere('conv.tenant_id = :tenantId', { tenantId: user.tenantId });
       }
+
+      const conversation = await qb.getOne();
+
+      if (!conversation) throw new NotFoundException('Conversation not found');
 
       if (conversation.status === ConversationStatus.RESOLVED) {
         throw new BadRequestException('Cannot claim a resolved conversation');
       }
 
-      // By the time we reach here, we own the lock.
-      // The row reflects the committed state – if another agent claimed it
-      // between our read and now, assignedAgentId will be non-null.
       if (conversation.assignedAgentId && conversation.assignedAgentId !== user.id) {
-        throw new ConflictException(
-          'This conversation was just claimed by another agent',
-        );
+        throw new ConflictException('This conversation was just claimed by another agent');
       }
 
       if (conversation.assignedAgentId === user.id) {
-        return conversation; // Idempotent – already claimed by this agent
+        return conversation;
       }
 
-      // Safe to claim – write within the same transaction
-      conversation.assignedAgentId = user.id;
+      conversation.assignedAgent = { id: user.id } as any;
       conversation.claimedAt = new Date();
       conversation.status = ConversationStatus.PENDING;
 
       return manager.save(Conversation, conversation);
-      // Transaction commits here → lock released → waiting tx proceeds (and finds conv claimed)
     });
   }
 
-  // ─── Resolve Conversation (triggers background job) ───────────────────────
+  // ─── Resolve ──────────────────────────────────────────────────────────────
   async resolveConversation(
     id: string,
     user: User,
@@ -168,11 +194,7 @@ export class ConversationsService {
       throw new BadRequestException('Conversation is already resolved');
     }
 
-    // Only assigned agent or admins can resolve
-    if (
-      user.role === UserRole.AGENT &&
-      conv.assignedAgentId !== user.id
-    ) {
+    if (user.role === UserRole.AGENT && conv.assignedAgentId !== user.id) {
       throw new ForbiddenException('Only the assigned agent can resolve this conversation');
     }
 
@@ -181,20 +203,16 @@ export class ConversationsService {
 
     const saved = await this.convRepo.save(conv);
 
-    // Add a system message if resolution note was provided
     if (dto.resolutionNote) {
       await this.msgRepo.save(
         this.msgRepo.create({
-          conversationId: conv.id,
+          conversation: { id: conv.id } as any,
           senderType: MessageSenderType.SYSTEM,
           body: `Resolution note: ${dto.resolutionNote}`,
         }),
       );
     }
 
-    // ── Dispatch background job ────────────────────────────────────────────
-    // This offloads email-sending to a Bull worker so the HTTP response
-    // returns immediately without waiting for email delivery.
     await this.resolutionQueue.add(
       RESOLUTION_JOB,
       {

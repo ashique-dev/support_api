@@ -5,6 +5,7 @@ import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { BullModule } from '@nestjs/bull';
 import { APP_GUARD } from '@nestjs/core';
 import configuration from './config/configuration';
+import { SnakeCaseNamingStrategy } from './database/snake-case-naming.strategy';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { TenantsModule } from './tenants/tenants.module';
@@ -33,7 +34,8 @@ import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
         database: config.get('database.name'),
         entities: [__dirname + '/**/*.entity{.ts,.js}'],
         migrations: [__dirname + '/database/migrations/**/*{.ts,.js}'],
-        synchronize: config.get('nodeEnv') === 'development', // Use migrations in production
+        synchronize: config.get('nodeEnv') === 'development',
+        namingStrategy: new SnakeCaseNamingStrategy(),
         logging: config.get('nodeEnv') === 'development',
         extra: {
           // PostgreSQL connection pool settings

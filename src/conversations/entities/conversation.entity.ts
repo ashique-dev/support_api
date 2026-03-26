@@ -8,6 +8,7 @@ import {
   OneToMany,
   JoinColumn,
   Index,
+  RelationId,
 } from 'typeorm';
 import { Tenant } from '../../tenants/entities/tenant.entity';
 import { User } from '../../users/entities/user.entity';
@@ -28,17 +29,15 @@ export enum ConversationPriority {
 }
 
 @Entity('conversations')
-// Composite indexes for multi-tenant queries
-@Index(['tenantId', 'status'])               // Filter by tenant + status
-@Index(['tenantId', 'assignedAgentId'])      // Filter by agent within tenant
-@Index(['tenantId', 'createdAt'])            // Sorting by date within tenant
-@Index(['tenantId', 'status', 'createdAt'])  // Analytics: active convos per tenant
+// Use relation property names (not RelationId aliases) for class-level indexes
+@Index(['tenant', 'status'])
+@Index(['tenant', 'assignedAgent'])
+@Index(['tenant', 'createdAt'])
 export class Conversation {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Index()
-  @Column()
+  @RelationId((conv: Conversation) => conv.tenant)
   tenantId: string;
 
   @Column({ length: 500 })
@@ -47,21 +46,13 @@ export class Conversation {
   @Column({ type: 'text', nullable: true })
   description: string;
 
-  @Column({
-    type: 'enum',
-    enum: ConversationStatus,
-    default: ConversationStatus.OPEN,
-  })
+  @Column({ type: 'enum', enum: ConversationStatus, default: ConversationStatus.OPEN })
   status: ConversationStatus;
 
-  @Column({
-    type: 'enum',
-    enum: ConversationPriority,
-    default: ConversationPriority.MEDIUM,
-  })
+  @Column({ type: 'enum', enum: ConversationPriority, default: ConversationPriority.MEDIUM })
   priority: ConversationPriority;
 
-  @Column({ nullable: true })
+  @RelationId((conv: Conversation) => conv.assignedAgent)
   assignedAgentId: string;
 
   @Column({ length: 255 })
@@ -70,10 +61,10 @@ export class Conversation {
   @Column({ length: 100 })
   customerName: string;
 
-  @Column({ nullable: true })
+  @Column({ nullable: true, type: 'timestamptz' })
   resolvedAt: Date;
 
-  @Column({ nullable: true })
+  @Column({ nullable: true, type: 'timestamptz' })
   claimedAt: Date;
 
   @CreateDateColumn()
@@ -83,11 +74,11 @@ export class Conversation {
   updatedAt: Date;
 
   @ManyToOne(() => Tenant, (tenant) => tenant.conversations)
-  @JoinColumn({ name: 'tenantId' })
+  @JoinColumn({ name: 'tenant_id' })
   tenant: Tenant;
 
   @ManyToOne(() => User, (user) => user.assignedConversations, { nullable: true })
-  @JoinColumn({ name: 'assignedAgentId' })
+  @JoinColumn({ name: 'assigned_agent_id' })
   assignedAgent: User;
 
   @OneToMany(() => Message, (msg) => msg.conversation)

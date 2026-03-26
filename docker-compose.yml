@@ -61,7 +61,7 @@ services:
       JWT_ACCESS_EXPIRES_IN: ${JWT_ACCESS_EXPIRES_IN:-15m}
       JWT_REFRESH_EXPIRES_IN: ${JWT_REFRESH_EXPIRES_IN:-7d}
     ports:
-      - '3000:3000'
+      - '3065:3000'
     volumes:
       - ./src:/app/src
 

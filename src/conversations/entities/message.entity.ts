@@ -6,6 +6,7 @@ import {
   ManyToOne,
   JoinColumn,
   Index,
+  RelationId,
 } from 'typeorm';
 import { Conversation } from './conversation.entity';
 import { User } from '../../users/entities/user.entity';
@@ -17,39 +18,35 @@ export enum MessageSenderType {
 }
 
 @Entity('messages')
-@Index(['conversationId', 'createdAt']) // Paginate messages within conversation
-@Index(['conversationId'])              // Quick lookup by conversation
+// Use the actual DB column names in class-level @Index decorators
+@Index(['conversation', 'createdAt'])
 export class Message {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column()
+  @RelationId((msg: Message) => msg.conversation)
   conversationId: string;
 
-  @Column({ nullable: true })
-  senderId: string; // null for customer messages
+  @RelationId((msg: Message) => msg.sender)
+  senderId: string;
 
-  @Column({
-    type: 'enum',
-    enum: MessageSenderType,
-    default: MessageSenderType.CUSTOMER,
-  })
+  @Column({ type: 'enum', enum: MessageSenderType, default: MessageSenderType.CUSTOMER })
   senderType: MessageSenderType;
 
   @Column('text')
   body: string;
 
   @Column({ default: false })
-  isInternal: boolean; // Internal notes visible only to agents
+  isInternal: boolean;
 
   @CreateDateColumn()
   createdAt: Date;
 
   @ManyToOne(() => Conversation, (conv) => conv.messages, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'conversationId' })
+  @JoinColumn({ name: 'conversation_id' })
   conversation: Conversation;
 
   @ManyToOne(() => User, { nullable: true })
-  @JoinColumn({ name: 'senderId' })
+  @JoinColumn({ name: 'sender_id' })
   sender: User;
 }
