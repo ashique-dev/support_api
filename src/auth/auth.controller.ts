@@ -46,6 +46,7 @@ export class AuthController {
   // ─── Refresh Token ────────────────────────────────────────────────────────
   @Public()
   @UseGuards(AuthGuard('jwt-refresh'))
+  @ApiBearerAuth('refresh-token')
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Issue new access token using refresh token' })

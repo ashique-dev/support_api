@@ -16,7 +16,7 @@ export class JwtRefreshStrategy extends PassportStrategy(Strategy, 'jwt-refresh'
     @InjectRepository(User) private userRepo: Repository<User>,
   ) {
     super({
-      jwtFromRequest: ExtractJwt.fromBodyField('refreshToken'),
+      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
       secretOrKey: configService.get<string>('jwt.refreshSecret'),
       passReqToCallback: true,
@@ -24,11 +24,15 @@ export class JwtRefreshStrategy extends PassportStrategy(Strategy, 'jwt-refresh'
   }
 
   async validate(req: Request, payload: JwtPayload) {
-    const refreshToken = req.body?.refreshToken;
+    const refreshToken = ExtractJwt.fromAuthHeaderAsBearerToken()(req);
+
+    if (!refreshToken) {
+      throw new UnauthorizedException('Missing refresh token');
+    }
 
     const user = await this.userRepo.findOne({
       where: { id: payload.sub },
-      select: ['id', 'email', 'role', 'tenantId', 'refreshToken', 'isActive'],
+      select: ['id', 'email', 'role', 'tenant', 'refreshToken', 'isActive'],
     });
 
     if (!user || !user.isActive || !user.refreshToken) {
