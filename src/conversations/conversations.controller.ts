@@ -12,6 +12,7 @@ import {
 } from './dto/conversation.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
+import { BlockSuperAdmin } from '../auth/decorators/block-super-admin.decorator';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { User, UserRole } from '../users/entities/user.entity';
 
@@ -24,6 +25,7 @@ export class ConversationsController {
 
   // ─── Create ───────────────────────────────────────────────────────────────
   @Post()
+  @BlockSuperAdmin()
   @Throttle({ conversation: { ttl: 60_000, limit: 20 } }) // 20 per minute per tenant
   @Roles(UserRole.TENANT_ADMIN, UserRole.AGENT)
   @ApiOperation({ summary: 'Create a new support conversation' })
