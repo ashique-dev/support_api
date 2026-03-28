@@ -1,5 +1,6 @@
 import {
   Controller,
+  Get,
   Post,
   Body,
   HttpCode,
@@ -47,7 +48,7 @@ export class AuthController {
   @Public()
   @UseGuards(AuthGuard('jwt-refresh'))
   @ApiBearerAuth('refresh-token')
-  @Post('refresh')
+  @Get('refresh')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Issue new access token using refresh token' })
   @ApiResponse({ status: 200, description: 'New token pair issued' })
@@ -57,7 +58,7 @@ export class AuthController {
   }
 
   // ─── Sign Out ─────────────────────────────────────────────────────────────
-  @Post('sign-out')
+  @Get('sign-out')
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiBearerAuth('access-token')
   @ApiOperation({ summary: 'Invalidate refresh token' })
