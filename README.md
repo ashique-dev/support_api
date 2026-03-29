@@ -191,7 +191,8 @@ Every tenant's data lives in the same PostgreSQL database and the same tables, d
   Authorization: Bearer <accessToken>
 
   When access token expires:
-  POST /auth/refresh  { refreshToken }
+  GET /auth/refresh
+  Authorization: Bearer <refreshToken>
   → New accessToken + refreshToken (rotation)
 ```
 
