@@ -1,6 +1,6 @@
 # 🎧 Support Platform API
 
-A secure, multi-tenant SaaS Customer Support backend built with **NestJS · TypeScript · PostgreSQL · TypeORM · Redis · BullMQ**.
+A secure, multi-tenant SaaS Customer Support backend built with **NestJS · TypeScript · PostgreSQL · TypeORM · Redis · Bull**.
 
 ---
 
@@ -86,7 +86,7 @@ src/
 │   ├── conversations.service.ts   # Claim (SELECT FOR UPDATE), Resolve
 │   └── conversations.controller.ts
 ├── analytics/               # Top conversations + Redis cache
-├── workers/                 # BullMQ processor for resolution emails
+├── workers/                 # Bull processor for resolution emails
 ├── common/
 │   ├── filters/             # HttpExceptionFilter
 │   ├── guards/              # TenantIsolationGuard
@@ -109,8 +109,8 @@ src/
 |--------|-----------------------|------|-------------|
 | POST   | /api/v1/auth/sign-up  | ✗    | Register new user |
 | POST   | /api/v1/auth/sign-in  | ✗    | Login, receive access + refresh token |
-| POST   | /api/v1/auth/refresh  | RT   | Issue new access token using refresh token |
-| POST   | /api/v1/auth/sign-out | ✓    | Invalidate refresh token |
+| GET   | /api/v1/auth/refresh  | RT   | Issue new access token using refresh token |
+| GET   | /api/v1/auth/sign-out | ✓    | Invalidate refresh token |
 
 ### Conversations
 
@@ -281,7 +281,7 @@ When a conversation is resolved, sending an email synchronously in the HTTP hand
 2. Fail the entire operation if the email server is down
 3. Provide no retry mechanism
 
-Instead, we dispatch a job to BullMQ (backed by Redis) and return `200 OK` immediately.
+Instead, we dispatch a job to Bull (backed by Redis) and return `200 OK` immediately.
 
 ```
 POST /conversations/:id/resolve
@@ -290,7 +290,7 @@ POST /conversations/:id/resolve
     ├── resolutionQueue.add('send-resolution-email', payload)
     └── Return 200 OK (email not sent yet)
 
-BullMQ Worker (separate process context):
+Bull Worker (separate process context):
     │
     ├── Dequeue job
     ├── Build email envelope
