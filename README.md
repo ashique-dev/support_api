@@ -34,7 +34,6 @@ A secure, multi-tenant SaaS Customer Support backend built with **NestJS · Type
 git clone https://github.com/ashique-dev/support_api.git
 cd support-api
 cp .env.example .env
-# Edit .env with your secrets (or use the defaults for local dev)
 ```
 
 ### 2. Start Everything (one command)
